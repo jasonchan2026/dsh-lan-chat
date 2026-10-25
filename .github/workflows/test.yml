@@ -21,10 +21,10 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
-      # 插件本体零运行时依赖，这三套测试不需要安装任何东西
+      # 插件本体零运行时依赖，这几套测试不需要安装任何东西
       - name: 语法检查
         run: |
-          for f in lib/*.js; do node --check "$f"; done
+          for f in lib/*.js scripts/*.mjs; do node --check "$f"; done
 
       - name: 协议层自测
         run: node scripts/selftest.mjs
@@ -34,6 +34,10 @@ jobs:
 
       - name: 两台机器端到端
         run: node scripts/e2etest.mjs
+
+      # 安全回归：鉴权、同源、SSRF、WS 上限、文件 GC 等
+      - name: 安全回归
+        run: node scripts/sectest.mjs
 
       # 界面测试要 React + jsdom，只有这一步装开发依赖
       - name: 安装界面测试依赖
