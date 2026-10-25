@@ -230,7 +230,7 @@ $DSH_HOME/plugin-data/dsh-lan-chat/
 
 ## 自测
 
-五套离线测试，不需要网络，也不需要 DSH 在跑：
+六套离线测试，不需要网络，也不需要 DSH 在跑：
 
 ```bash
 node scripts/selftest.mjs    # 协议层：WS 帧、文件、群、扫描、鉴权、昵称同步、持久化（34 项）
@@ -238,9 +238,15 @@ node scripts/hosttest.mjs    # 宿主路由：全部 /lan-chat/* 接口 + 桌面
 node scripts/clienttest.mjs  # 界面：真 React + jsdom 挂载并驱动交互（67 项）
 node scripts/e2etest.mjs     # 两台机器互联：发现→添加→单聊→群聊→文件→解散群（40 项）
 node scripts/sectest.mjs     # 安全回归：22 个渗透测试发现逐条验证 + 解散群越权（52 项）
+node scripts/themetest.mjs   # 主题配色：DSH token 存在性 + 明暗两套 WCAG 对比度（65 项）
 ```
 
-合计 **223 项**（不含需要额外开发依赖的 `clienttest.mjs`）。
+合计 **288 项**（不含需要额外开发依赖的 `clienttest.mjs`）。
+
+`themetest.mjs` 是补上「深色主题下配色失效」这个缺陷后加的。它做两件事：
+把插件引用的每个 `--dsw-alias-*` 变量拿去和 DSH 主题比对，名字写错立刻失败
+（`var()` 写错不会报错，只会静默用兜底值，这类 bug 功能测试全绿也发现不了）；
+再用 DSH 真实的明 / 暗两套取值算 WCAG 对比度，挡住「能解析但看不清」。
 
 `clienttest.mjs` 需要开发依赖 react / react-dom / jsdom（不进插件包）：
 
@@ -306,6 +312,7 @@ dsh-lan-chat/
     ├── clienttest.mjs
     ├── e2etest.mjs
     ├── sectest.mjs      安全回归（渗透测试用例转成的可提交测试）
+    ├── themetest.mjs    主题配色（token 存在性 + 明暗对比度）
     └── wire-profile.mjs
 ```
 
