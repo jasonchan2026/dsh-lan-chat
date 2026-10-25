@@ -8,6 +8,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer, request } from 'node:http'
+import { createServer as createNetServer } from 'node:net'
 
 const results = []
 function check(name, condition, detail) {
@@ -133,6 +134,35 @@ const main = async () => {
   const noOriginGet = await api('/state', { headers: { origin: '', 'sec-fetch-site': '' } })
   check('F-09 读操作缺 Origin 仍放行（EventSource/导航）', noOriginGet.status === 200, String(noOriginGet.status))
 
+  // ---- 桌面端（dsh-app://app）：Electron 主进程转发时会删掉 Origin，
+  //      写操作改认 x-lan-chat-client: desktop 这个自定义头。
+  const desktopWrite = await api('/settings', {
+    method: 'POST',
+    body: { nickname: '桌面改名' },
+    headers: { origin: '', 'sec-fetch-site': '', 'x-lan-chat-client': 'desktop' },
+  })
+  check('桌面端无 Origin 的写操作放行', desktopWrite.status === 200 && desktopWrite.json?.settings?.nickname === '桌面改名', String(desktopWrite.status))
+  // 关键：不能因为放行桌面端就削弱 CSRF —— 没有这个头的写操作仍然必须被拒。
+  const spoofOrigin = await api('/settings', {
+    method: 'POST',
+    body: { nickname: 'csrf2' },
+    headers: { origin: 'http://evil.example.com', 'x-lan-chat-client': 'desktop' },
+  })
+  check('桌面端标识头不能绕过跨站 Origin 检查', spoofOrigin.status === 403, String(spoofOrigin.status))
+  const rebindDesktop = await api('/settings', {
+    method: 'POST',
+    body: { nickname: 'csrf3' },
+    headers: { host: 'evil.example.com', 'x-lan-chat-client': 'desktop', origin: '' },
+  })
+  check('桌面端标识头不能绕过 DNS rebinding 检查', rebindDesktop.status === 403, String(rebindDesktop.status))
+  const badClientValue = await api('/settings', {
+    method: 'POST',
+    body: { nickname: 'csrf4' },
+    headers: { origin: '', 'sec-fetch-site': '', 'x-lan-chat-client': 'browser' },
+  })
+  check('未知客户端标识值仍被拒（403）', badClientValue.status === 403, String(badClientValue.status))
+  await api('/settings', { method: 'POST', body: { nickname: '改过的名字' } })
+
   // ---- F-10：DNS rebinding —— Host 不是回环就拒绝
   const rebind = await api('/state', { headers: { host: 'evil.example.com' } })
   check('F-10 非回环 Host 被拒（403）', rebind.status === 403, String(rebind.status))
@@ -141,7 +171,7 @@ const main = async () => {
 
   // ---- F-08：每个路由都要过同源检查（不是只有部分）
   // 只列注册过的精确路由（/file 是前缀路由，不走 route()）。
-  const routePaths = ['/state', '/settings', '/contacts', '/contacts/alias', '/conversations', '/groups', '/messages', '/messages/delete', '/discover', '/diag', '/events', '/probe', '/scan', '/read']
+  const routePaths = ['/state', '/settings', '/contacts', '/contacts/alias', '/conversations', '/groups', '/messages', '/messages/delete', '/discover', '/diag', '/events', '/probe', '/scan', '/read', '/listen/retry']
   let guarded = 0
   for (const path of routePaths) {
     const res = await api(path, { headers: { host: 'evil.example.com' } })
@@ -326,6 +356,45 @@ const main = async () => {
   check('未知路由返回 404', notFound.status === 404)
   const wrongMethod = await api('/send', { method: 'GET' })
   check('错误方法返回 405', wrongMethod.status === 405)
+
+  // ---- 端口被占用时的自愈：先占住端口，验证报错；释放后重试应恢复
+  {
+    const busyPort = 45913
+    const squatter = createNetServer(() => {})
+    await new Promise((resolve) => squatter.listen(busyPort, '0.0.0.0', resolve))
+    const busyDir = await mkdtemp(join(tmpdir(), 'lanchat-busy-'))
+    const busyCtx = makeCtx()
+    const busyHost = await startHost(busyCtx, { dataDir: busyDir, port: busyPort, nickname: '被占端口' })
+    check('端口被占用时监听失败但不崩溃', busyHost.port === 0 && typeof busyHost.startError === 'string', String(busyHost.startError))
+    check('端口占用错误是 EADDRINUSE', String(busyHost.startError).includes('EADDRINUSE'), String(busyHost.startError))
+    const busyState = await busyHost.store.settings
+    check('监听失败时仍能读写本地数据', busyState !== null)
+
+    const { server: busyServer, port: busyApiPort } = await serveRoutes(busyCtx)
+    const busyApi = (path, options) => call(busyApiPort, `/lan-chat${path}`, options)
+    const stateBusy = await busyApi('/state')
+    check('/state 报告未监听并给出重试信息', stateBusy.json?.listening === false && stateBusy.json?.retry?.pending === true, JSON.stringify(stateBusy.json?.retry))
+
+    // 先测「仍在占用时重试」：应保持失败，不能假报成功
+    const stillBusy = await busyApi('/listen/retry', { method: 'POST', body: {} })
+    check('端口仍被占用时重试返回未监听', stillBusy.json?.listening === false && stillBusy.json?.ok === true)
+
+    // 释放端口后重试：应真正监听成功
+    await new Promise((resolve) => squatter.close(resolve))
+    const recovered = await busyApi('/listen/retry', { method: 'POST', body: {} })
+    check('端口释放后重试监听成功', recovered.json?.listening === true && recovered.json?.port === busyPort, JSON.stringify(recovered.json))
+    const stateAfter = await busyApi('/state')
+    check('/state 反映恢复后的监听状态', stateAfter.json?.listening === true && stateAfter.json?.startError === null)
+    check('恢复后 host.port 同步更新', busyHost.port === busyPort, String(busyHost.port))
+
+    // 恢复后可正常收发：再重试一次应该幂等
+    const again = await busyApi('/listen/retry', { method: 'POST', body: {} })
+    check('已监听时重复重试幂等', again.json?.alreadyListening === true && again.json?.port === busyPort)
+
+    busyServer.close()
+    await busyHost.dispose()
+    await rm(busyDir, { recursive: true, force: true })
+  }
 
   // ---- 重启后数据还在
   await host.dispose()

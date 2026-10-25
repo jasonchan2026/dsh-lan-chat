@@ -232,11 +232,13 @@ $DSH_HOME/plugin-data/dsh-lan-chat/
 
 ```bash
 node scripts/selftest.mjs    # 协议层：WS 帧、文件、群、扫描、鉴权、昵称同步、持久化（34 项）
-node scripts/hosttest.mjs    # 宿主路由：全部 /lan-chat/* 接口（50 项）
+node scripts/hosttest.mjs    # 宿主路由：全部 /lan-chat/* 接口 + 桌面端来源校验 + 端口重试（86 项）
 node scripts/clienttest.mjs  # 界面：真 React + jsdom 挂载并驱动交互（67 项）
 node scripts/e2etest.mjs     # 两台机器互联：发现→添加→单聊→群聊→文件（35 项）
-node scripts/sectest.mjs     # 安全回归：22 个渗透测试发现逐条验证（40 项）
+node scripts/sectest.mjs     # 安全回归：22 个渗透测试发现逐条验证（47 项）
 ```
+
+合计 **202 项**（不含需要额外开发依赖的 `clienttest.mjs`）。
 
 `clienttest.mjs` 需要开发依赖 react / react-dom / jsdom（不进插件包）：
 
