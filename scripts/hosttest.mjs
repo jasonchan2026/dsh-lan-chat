@@ -141,11 +141,20 @@ const main = async () => {
 
   // ---- F-08：每个路由都要过同源检查（不是只有部分）
   // 只列注册过的精确路由（/file 是前缀路由，不走 route()）。
-  const routePaths = ['/state', '/settings', '/contacts', '/conversations', '/groups', '/messages', '/discover', '/diag', '/events', '/probe', '/scan', '/read']
+  const routePaths = ['/state', '/settings', '/contacts', '/contacts/alias', '/conversations', '/groups', '/messages', '/messages/delete', '/discover', '/diag', '/events', '/probe', '/scan', '/read']
   let guarded = 0
   for (const path of routePaths) {
     const res = await api(path, { headers: { host: 'evil.example.com' } })
     if (res.status === 403) guarded += 1
+  }
+
+  // 两个新写接口：缺 Origin 的 POST 必须被拒（挡跨站表单/JS 直接打）
+  for (const [path, body] of [
+    ['/contacts/alias', { peerId: 'lc-peer-b', alias: 'x' }],
+    ['/messages/delete', { convId: 'dm:a|b', all: true }],
+  ]) {
+    const res = await api(path, { method: 'POST', body, headers: { origin: 'http://evil.example.com', 'sec-fetch-site': 'cross-site' } })
+    check(`新接口 ${path} 拒跨站 POST（403）`, res.status === 403, String(res.status))
   }
   check('F-08 全部路由都过同源检查', guarded === routePaths.length, `${guarded}/${routePaths.length}`)
 
@@ -170,6 +179,36 @@ const main = async () => {
   const convs = await api('/conversations')
   check('会话列表出现该单聊', convs.json?.conversations?.some((row) => row.kind === 'dm' && row.peerId === fakePeer), JSON.stringify(convs.json?.conversations?.map((r) => r.kind)))
 
+  // ---- 联系人备注（只改本机显示）
+  const aliasSet = await api('/contacts/alias', { method: 'POST', body: { peerId: fakePeer, alias: '隔壁老王' } })
+  check('可以给联系人设备注', aliasSet.json?.ok === true && aliasSet.json.contact.alias === '隔壁老王')
+  const aliasConvs = await api('/conversations')
+  const aliasRow = aliasConvs.json?.conversations?.find((row) => row.peerId === fakePeer)
+  check('会话标题跟着用备注名', aliasRow?.title === '隔壁老王', aliasRow?.title)
+  const aliasList = await api('/contacts')
+  const aliasContact = aliasList.json?.contacts?.find((row) => row.peerId === fakePeer)
+  check('备注不影响对方昵称字段', aliasContact?.nickname === '同事B' && aliasContact?.alias === '隔壁老王', `${aliasContact?.nickname} / ${aliasContact?.alias}`)
+  const aliasClear = await api('/contacts/alias', { method: 'POST', body: { peerId: fakePeer, alias: '' } })
+  check('备注可以清空', aliasClear.json?.ok === true && aliasClear.json.contact.alias === '')
+  const aliasMissing = await api('/contacts/alias', { method: 'POST', body: { peerId: 'lc-nobody', alias: 'x' } })
+  check('给不存在的联系人设备注返回 404', aliasMissing.status === 404)
+
+  // 备注改回来后，后面的断言继续用原昵称
+  await api('/contacts/alias', { method: 'POST', body: { peerId: fakePeer, alias: '' } })
+
+  // ---- 文件上限可配
+  const quotaState = await api('/state')
+  check('状态里带出文件上限可配范围', typeof quotaState.json?.settings?.maxFileBytes === 'number' && quotaState.json.settings.quotaMinBytes > 0 && quotaState.json.settings.quotaMaxBytes > quotaState.json.settings.quotaMinBytes)
+  const quotaSet = await api('/settings', { method: 'POST', body: { maxFileBytes: 256 * 1024 * 1024 } })
+  check('可以把单文件上限改成 256MB', quotaSet.json?.settings?.maxFileBytes === 256 * 1024 * 1024, String(quotaSet.json?.settings?.maxFileBytes))
+  const quotaTooSmall = await api('/settings', { method: 'POST', body: { maxFileBytes: 1024 } })
+  check('过小的上限被夹到下限', quotaTooSmall.json?.settings?.maxFileBytes === 64 * 1024 * 1024, String(quotaTooSmall.json?.settings?.maxFileBytes))
+  const quotaZero = await api('/settings', { method: 'POST', body: { maxFileBytes: 0 } })
+  check('上限填 0 被拒', quotaZero.status === 400, quotaZero.json?.error)
+  // 恢复成默认，避免影响后面的上传测试
+  await api('/settings', { method: 'POST', body: { maxFileBytes: 512 * 1024 * 1024 } })
+
+
   // ---- 发消息（对端不在线 → delivered 0，但本地必须落盘）
   const dmConv = convs.json.conversations.find((row) => row.peerId === fakePeer).convId
   const sent = await api('/send', { method: 'POST', body: { convId: dmConv, text: '第一条本地消息' } })
@@ -186,6 +225,23 @@ const main = async () => {
   const afterSend = await api('/conversations')
   const dmSummary = afterSend.json.conversations.find((row) => row.convId === dmConv)
   check('会话摘要带最后一条预览', dmSummary?.lastText === '第一条本地消息', dmSummary?.lastText)
+
+  // ---- 删除消息
+  const convIdForDelete = encodeURIComponent(dmConv)
+  const seeded = await api(`/messages?convId=${convIdForDelete}&limit=1000`)
+  const firstId = seeded.json?.messages?.[0]?.id
+  check('会话里有消息可删', typeof firstId === 'string' && seeded.json.messages.length >= 1, `${seeded.json?.messages?.length} 条`)
+  const delMissing = await api('/messages/delete', { method: 'POST', body: { convId: dmConv, messageId: 'm-not-exist' } })
+  check('删不存在的消息返回 404', delMissing.status === 404)
+  const deleted = await api('/messages/delete', { method: 'POST', body: { convId: dmConv, messageId: firstId } })
+  check('可以删除单条消息', deleted.json?.ok === true && deleted.json.removed === true)
+  const afterDelete = await api(`/messages?convId=${convIdForDelete}&limit=1000`)
+  check('删掉的消息不再返回', !(afterDelete.json?.messages ?? []).some((row) => row.id === firstId), `剩 ${afterDelete.json?.messages?.length} 条`)
+
+  const cleared = await api('/messages/delete', { method: 'POST', body: { convId: dmConv, all: true } })
+  check('可以清空整个会话', cleared.json?.ok === true && cleared.json.removed >= 0, `删除 ${cleared.json?.removed} 条`)
+  const afterClear = await api(`/messages?convId=${convIdForDelete}&limit=1000`)
+  check('清空后会话为空', (afterClear.json?.messages ?? []).length === 0)
 
   const read = await api('/read', { method: 'POST', body: { convId: dmConv, ts: Date.now() } })
   check('标记已读成功', read.json?.ok === true)
@@ -277,7 +333,7 @@ const main = async () => {
   const ctx2 = makeCtx()
   const host2 = await startHost(ctx2, { dataDir: dir, port: 45911 })
   const msgs2 = await host2.store.listMessages(dmConv)
-  check('重启后消息仍在', msgs2.length === 2, `${msgs2.length} 条`)
+  check('重启后消息仍在（删过 1 条后剩 1 条）', msgs2.length === 1, `${msgs2.length} 条`)
   check('重启后身份不变', host2.store.peerId === host.store.peerId)
   check('重启后群还在', host2.store.myGroups().length === 1)
   const settings2 = host2.store.settings

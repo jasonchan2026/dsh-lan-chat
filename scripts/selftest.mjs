@@ -208,6 +208,28 @@ const main = async () => {
   const groupMessages = await b.store.listMessages(groupConv)
   check('群消息落盘', groupMessages.length === 1)
 
+  // ---- 7.5 昵称改名后能传回对端（_tokenFor 回填）
+  // A 侧先记住 B 的旧名字，然后 B 改名，A 再握手时应拿到新名字。
+  b.store.settings.nickname = '节点B改名后'
+  await b.store.saveNow()
+  const beforeNick = a.store.getContact(b.store.peerId)?.nickname
+  // 清掉缓存 token，强制重新握手
+  const bc = a.store.getContact(b.store.peerId)
+  if (bc !== undefined) {
+    a.store.upsertContact({ peerId: b.store.peerId, token: '', tokenExpiresAt: 0 })
+    await a.store.saveNow()
+  }
+  const refreshed = await a.node._tokenFor(a.store.getContact(b.store.peerId) ?? { peerId: b.store.peerId, addrs: ['127.0.0.1'], port: b.port })
+  check('重新握手拿到 token', typeof refreshed === 'string' && refreshed.length > 0)
+  check(
+    '握手会把对端最新昵称写回联系人',
+    a.store.getContact(b.store.peerId)?.nickname === '节点B改名后',
+    `${beforeNick} -> ${a.store.getContact(b.store.peerId)?.nickname}`,
+  )
+  // 改回去，避免影响后面的断言
+  b.store.settings.nickname = '节点B'
+  await b.store.saveNow()
+
   // ---- 8. 扫描
   const scan = b.node.scan({ addresses: ['127.0.0.1', '127.0.0.2', '127.0.0.3'], port: a.port })
   await new Promise((resolve) => setTimeout(resolve, 2500))
