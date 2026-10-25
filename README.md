@@ -12,7 +12,7 @@
 | 能力 | 说明 |
 | --- | --- |
 | 单聊 | 与任意一位同事一对一聊天，支持未读数、已读位置、在线状态 |
-| 群聊 | 自建群、拉人入群、改名、退群；群资料自动同步给成员 |
+| 群聊 | 自建群、拉人入群、改名、退群、删除；群资料自动同步给成员 |
 | 文件传输 | 拖拽或点选发送，单文件上限可配（默认 512MB）；接收方按需下载（不占用对方磁盘两次） |
 | 网段扫描 | 填 `192.168.1.0/24` 即可并发探测，进度实时显示 |
 | 自动发现 | 每 30 秒 UDP 广播一次，同网段的人无需手动添加就能互相看到 |
@@ -20,6 +20,7 @@
 | 访问码 | 可选。设置后只有知道访问码的人能与你通信 |
 | 联系人备注 | 给同事起本地备注名（如「隔壁老王」），只改自己这边的显示，不通知对方 |
 | 删除消息 | 单条删除或整个会话清空；只删本机记录，对方那份不受影响 |
+| 删除群聊 | 群主删=解散（通知全员一起删），成员删=只删本机这份；都会清掉该群本地消息 |
 | 文件上限 | 设置里可改单文件上限（64MB ~ 64GB），发送框提示实时跟随 |
 | 离线可用 | 对端不在线时消息照常记录在本地，联网后手动重发即可 |
 
@@ -158,6 +159,7 @@ HTTP 接口（`/lan-chat/v1/...`）：
 | POST | `/send` | 投递一条消息 |
 | POST | `/sync` | 拉取增量消息 |
 | POST | `/group` | 同步群资料 |
+| POST | `/group-removed` | 群主解散群时通知成员（2.2.0 新增） |
 | POST | `/profile` | 同步昵称 |
 | POST | `/upload` | 上传文件实体 |
 | GET | `/file/:id` | 下载文件实体 |
@@ -232,13 +234,13 @@ $DSH_HOME/plugin-data/dsh-lan-chat/
 
 ```bash
 node scripts/selftest.mjs    # 协议层：WS 帧、文件、群、扫描、鉴权、昵称同步、持久化（34 项）
-node scripts/hosttest.mjs    # 宿主路由：全部 /lan-chat/* 接口 + 桌面端来源校验 + 端口重试（86 项）
+node scripts/hosttest.mjs    # 宿主路由：全部 /lan-chat/* 接口 + 桌面端来源校验 + 端口重试 + 删群（97 项）
 node scripts/clienttest.mjs  # 界面：真 React + jsdom 挂载并驱动交互（67 项）
-node scripts/e2etest.mjs     # 两台机器互联：发现→添加→单聊→群聊→文件（35 项）
-node scripts/sectest.mjs     # 安全回归：22 个渗透测试发现逐条验证（47 项）
+node scripts/e2etest.mjs     # 两台机器互联：发现→添加→单聊→群聊→文件→解散群（40 项）
+node scripts/sectest.mjs     # 安全回归：22 个渗透测试发现逐条验证 + 解散群越权（52 项）
 ```
 
-合计 **202 项**（不含需要额外开发依赖的 `clienttest.mjs`）。
+合计 **223 项**（不含需要额外开发依赖的 `clienttest.mjs`）。
 
 `clienttest.mjs` 需要开发依赖 react / react-dom / jsdom（不进插件包）：
 
@@ -254,8 +256,8 @@ pnpm add -D react react-dom jsdom
 
 **网络层（局域网端口，默认 45871）**
 
-- 只有 `/lan-chat/v1/info` 和 `/hello` 匿名可读，其余 7 个接口（`/send` `/sync` `/group`
-  `/profile` `/upload` `/file` `/ws`）**全部要求 token**，否则 401
+- 只有 `/lan-chat/v1/info` 和 `/hello` 匿名可读，其余 8 个接口（`/send` `/sync` `/group`
+  `/group-removed` `/profile` `/upload` `/file` `/ws`）**全部要求 token**，否则 401
 - token 由 `/hello` 签发：`<随机串>.<HMAC-SHA256>`，有效期 24 小时，最多同时保留 512 个
 - 每个节点在 `identity.json` 里有一份 `secret` 作为身份密钥。首次握手时对端会记住它（TOFU），
   之后同一个 peerId 必须拿同一把密钥，否则 403 —— 防止别人顶替已知节点

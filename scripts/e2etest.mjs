@@ -249,6 +249,26 @@ const main = async () => {
   })
   check('甲收到群回复', groupReplyArrived)
 
+  // ---- 6.5 群主解散群：乙那边也要跟着删掉（群和消息一起）
+  {
+    const gid = groupCreated.json.group.id
+    const bMsgsBefore = ((await apiB(`/messages?convId=${encodeURIComponent(`grp:${gid}`)}`)).json?.messages ?? []).length
+    check('解散前乙有群消息', bMsgsBefore > 0, `${bMsgsBefore} 条`)
+
+    const dissolved = await apiA('/groups/remove', { method: 'POST', body: { groupId: gid } })
+    check('甲（群主）解散群', dissolved.json?.ok === true && dissolved.json?.dissolved === true)
+
+    const bGone = await until(async () => {
+      const payload = await apiB('/groups')
+      return !(payload.json?.groups ?? []).some((row) => row.id === gid)
+    })
+    check('乙侧的群也被删掉', bGone)
+    const bMsgsAfter = ((await apiB(`/messages?convId=${encodeURIComponent(`grp:${gid}`)}`)).json?.messages ?? []).length
+    check('乙侧的群消息也清空', bMsgsAfter === 0, `${bMsgsAfter} 条`)
+    const bConvs = await apiB('/conversations')
+    check('乙会话列表不再有该群', !(bConvs.json?.conversations ?? []).some((row) => row.groupId === gid))
+  }
+
   // ---- 7. 昵称同步
   await apiA('/settings', { method: 'POST', body: { nickname: '机器甲改名' } })
   const renamed = await until(async () => {

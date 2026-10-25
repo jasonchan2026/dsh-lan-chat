@@ -329,6 +329,40 @@ const main = async () => {
   check('/diag 返回目录名', typeof diag.json?.dataDirName === 'string' && dir.endsWith(diag.json.dataDirName), diag.json?.dataDirName)
   check('/diag 显示监听端口', diag.json?.port === host.port)
 
+  // ---- 删除群聊：群主解散 + 非群主只删本机
+  {
+    // 群主解散：本机群、消息、已读一起清掉
+    const dg = await api('/groups/create', { method: 'POST', body: { name: '待解散群', members: ['lc-ghost-1', 'lc-ghost-2'] } })
+    const dgId = dg.json.group.id
+    const dgConv = dg.json.convId
+    await api('/send', { method: 'POST', body: { convId: dgConv, text: '解散前的一条' } })
+    const beforeMsgs = (await api(`/messages?convId=${encodeURIComponent(dgConv)}`)).json.messages.length
+    check('解散前群里有消息', beforeMsgs >= 2, `${beforeMsgs} 条`)
+
+    const ownFlag = (await api('/conversations')).json.conversations.find((row) => row.groupId === dgId)?.own
+    check('/conversations 给群主标记 own=true', ownFlag === true)
+
+    const dissolved = await api('/groups/remove', { method: 'POST', body: { groupId: dgId } })
+    check('群主删群返回 dissolved=true', dissolved.json?.ok === true && dissolved.json?.dissolved === true)
+    check('群已从列表消失', !(await api('/groups')).json.groups.some((row) => row.id === dgId))
+    check('群消息已一起清空', (await api(`/messages?convId=${encodeURIComponent(dgConv)}`)).json.messages.length === 0)
+    check('会话列表不再包含该群', !(await api('/conversations')).json.conversations.some((row) => row.groupId === dgId))
+    check('重复删除返回 404', (await api('/groups/remove', { method: 'POST', body: { groupId: dgId } })).status === 404)
+
+    // 非群主删群：只删本机，dissolved=false
+    const other = await api('/groups/create', { method: 'POST', body: { name: '别人的群', members: [] } })
+    // 手动把它改成「别人建的」
+    host.store.updateGroup(other.json.group.id, { createdBy: 'lc-someone-else' })
+    const memberDel = await api('/groups/remove', { method: 'POST', body: { groupId: other.json.group.id } })
+    check('非群主删群 dissolved=false', memberDel.json?.ok === true && memberDel.json?.dissolved === false)
+    check('非群主删群后本机也没了', !(await api('/groups')).json.groups.some((row) => row.id === other.json.group.id))
+
+    // 删过的群不能被对方推送复活
+    host.store.mergeGroup({ id: dgId, name: '又来推一次', members: [host.store.peerId], createdBy: 'lc-ghost-1' })
+    check('已删除的群不会被推送复活', !(await api('/groups')).json.groups.some((row) => row.id === dgId))
+    check('删除标记已持久化', host.store.state.deletedGroups.includes(dgId))
+  }
+
   // ---- SSE
   const sseText = await new Promise((resolve) => {
     const req = request({ host: '127.0.0.1', port, path: '/lan-chat/events', method: 'GET' }, (res) => {

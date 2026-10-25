@@ -316,6 +316,31 @@ const main = async () => {
   check('非群主改别人的群被拒（403）', hijack.status === 403, String(hijack.status))
   const afterHijack = b.store.state.groups?.['g-inject-1']
   check('群名未被越权修改', afterHijack?.name === '注入群', afterHijack?.name)
+
+  // 2.2.0 新增：/group-removed 同样只能由群主发起，否则冒充群主就能解散别人的群
+  const unauth = await raw(b.port, `${API_PREFIX}/group-removed`, {
+    method: 'POST',
+    body: { groupId: 'g-inject-1' },
+  })
+  check('F-16 解散群接口无 token 被拒（401）', unauth.status === 401, String(unauth.status))
+  const notOwner = await raw(b.port, `${API_PREFIX}/group-removed`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${tokenAForB}` },
+    body: { groupId: 'g-inject-1' },
+  })
+  check('F-16 非群主解散别人的群被拒（403）', notOwner.status === 403, String(notOwner.status))
+  check('F-16 群未被越权解散', b.store.state.groups?.['g-inject-1'] !== undefined)
+
+  // 群主自己发就能解散（用 stranger 自己签发的 token 打 stranger 自己的节点）
+  const ownerToken = stranger.node.issueToken(stranger.store.peerId)
+  const selfRemove = await raw(stranger.port, `${API_PREFIX}/group-removed`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${ownerToken}` },
+    body: { groupId: 'g-inject-1' },
+  })
+  check('F-16 群主可解散自己的群', selfRemove.status === 200, String(selfRemove.status))
+  check('F-16 群主解散后群已移除', stranger.store.state.groups?.['g-inject-1'] === undefined)
+
   await stranger.node.close()
   await stranger.store.close()
   await rm(stranger.dir, { recursive: true, force: true })
