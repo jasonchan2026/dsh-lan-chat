@@ -362,30 +362,30 @@ const text = () => container.textContent ?? ''
 const byClass = (name) => [...container.querySelectorAll(`.${name}`)]
 const byText = (tag, value) => [...container.querySelectorAll(tag)].find((node) => (node.textContent ?? '').includes(value))
 
-check('渲染出根容器', container.querySelector('.lc-root') !== null)
-check('显示自己的昵称', text().includes('我自己'), byClass('lc-meName')[0]?.textContent)
+check('渲染出根容器', container.querySelector('.lanchat-root') !== null)
+check('显示自己的昵称', text().includes('我自己'), byClass('lanchat-meName')[0]?.textContent)
 check('显示监听端口', text().includes('45871'))
-check('三个页签都在', ['会话', '联系人', '发现'].every((label) => byClass('lc-tab').some((node) => (node.textContent ?? '').includes(label))))
-check('会话列表出现单聊', byClass('lc-rowName').some((node) => (node.textContent ?? '').includes('同事 B')), byClass('lc-rowName').map((n) => n.textContent).join('|'))
-check('会话列表出现群聊', byClass('lc-rowName').some((node) => (node.textContent ?? '').includes('值班组')))
-check('有未读红点', byClass('lc-badge').length > 0, `${byClass('lc-badge').length}`)
-check('未选中会话时显示引导', byClass('lc-emptyTitle').length === 1, byClass('lc-emptyTitle')[0]?.textContent)
+check('三个页签都在', ['会话', '联系人', '发现'].every((label) => byClass('lanchat-tab').some((node) => (node.textContent ?? '').includes(label))))
+check('会话列表出现单聊', byClass('lanchat-rowName').some((node) => (node.textContent ?? '').includes('同事 B')), byClass('lanchat-rowName').map((n) => n.textContent).join('|'))
+check('会话列表出现群聊', byClass('lanchat-rowName').some((node) => (node.textContent ?? '').includes('值班组')))
+check('有未读红点', byClass('lanchat-badge').length > 0, `${byClass('lanchat-badge').length}`)
+check('未选中会话时显示引导', byClass('lanchat-emptyTitle').length === 1, byClass('lanchat-emptyTitle')[0]?.textContent)
 
 // ---- 打开会话
-const dmRow = byClass('lc-row').find((node) => (node.textContent ?? '').includes('同事 B'))
+const dmRow = byClass('lanchat-row').find((node) => (node.textContent ?? '').includes('同事 B'))
 await act(async () => {
   dmRow.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
 })
 await flush()
 
-check('打开会话后显示消息', byClass('lc-bubbleMsg').length === 2, `${byClass('lc-bubbleMsg').length}`)
-check('消息内容正确', byClass('lc-bubbleMsg').some((node) => (node.textContent ?? '') === '在吗？'))
-check('自己的消息右对齐', byClass('lc-msg').some((node) => node.className.includes('self')))
-check('出现输入框', container.querySelector('.lc-composer textarea') !== null)
+check('打开会话后显示消息', byClass('lanchat-bubbleMsg').length === 2, `${byClass('lanchat-bubbleMsg').length}`)
+check('消息内容正确', byClass('lanchat-bubbleMsg').some((node) => (node.textContent ?? '') === '在吗？'))
+check('自己的消息右对齐', byClass('lanchat-msg').some((node) => node.className.includes('self')))
+check('出现输入框', container.querySelector('.lanchat-composer textarea') !== null)
 check('会话已标记已读', backend.calls.some((row) => row.path === '/read'))
 
 // ---- 发消息
-const textarea = container.querySelector('.lc-composer textarea')
+const textarea = container.querySelector('.lanchat-composer textarea')
 await act(async () => {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
   setter.call(textarea, '测试发消息')
@@ -393,7 +393,7 @@ await act(async () => {
 })
 await flush()
 
-const sendBtn = container.querySelector('.lc-sendBtn')
+const sendBtn = container.querySelector('.lanchat-sendBtn')
 check('发送按钮在草稿非空时可用', sendBtn.disabled === false, String(sendBtn.disabled))
 
 await act(async () => {
@@ -402,8 +402,8 @@ await act(async () => {
 await flush()
 
 check('发消息请求已发出', backend.calls.some((row) => row.path === '/send' && String(row.body).includes('测试发消息')))
-check('新消息出现在线程里', byClass('lc-bubbleMsg').some((node) => (node.textContent ?? '') === '测试发消息'), `${byClass('lc-bubbleMsg').length} 条`)
-check('发完清空输入框', (container.querySelector('.lc-composer textarea').value ?? '') === '')
+check('新消息出现在线程里', byClass('lanchat-bubbleMsg').some((node) => (node.textContent ?? '') === '测试发消息'), `${byClass('lanchat-bubbleMsg').length} 条`)
+check('发完清空输入框', (container.querySelector('.lanchat-composer textarea').value ?? '') === '')
 
 // ---- Enter 发送
 await act(async () => {
@@ -419,36 +419,36 @@ await flush()
 check('Enter 能发送', backend.calls.some((row) => row.path === '/send' && String(row.body).includes('回车发送')))
 
 // ---- 切到联系人
-const contactsTab = byClass('lc-tab').find((node) => (node.textContent ?? '').includes('联系人'))
+const contactsTab = byClass('lanchat-tab').find((node) => (node.textContent ?? '').includes('联系人'))
 await act(async () => {
   contactsTab.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
 })
 await flush()
-check('联系人页签显示联系人', byClass('lc-peerName').some((node) => (node.textContent ?? '').includes('同事 B')))
-check('联系人有「聊天」按钮', byClass('lc-btn').some((node) => (node.textContent ?? '') === '聊天'))
+check('联系人页签显示联系人', byClass('lanchat-peerName').some((node) => (node.textContent ?? '').includes('同事 B')))
+check('联系人有「聊天」按钮', byClass('lanchat-btn').some((node) => (node.textContent ?? '') === '聊天'))
 
 // ---- 切到发现
-const discoverTab = byClass('lc-tab').find((node) => (node.textContent ?? '').includes('发现'))
+const discoverTab = byClass('lanchat-tab').find((node) => (node.textContent ?? '').includes('发现'))
 await act(async () => {
   discoverTab.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
 })
 await flush()
 check('发现页显示扫描输入', [...container.querySelectorAll('input')].some((node) => node.getAttribute('aria-label') === '扫描网段'))
-check('发现页显示本机网段快捷键', byClass('lc-btn').some((node) => (node.textContent ?? '').includes('192.168.1.0/24')))
-check('发现页列出发现的节点', byClass('lc-peerName').some((node) => (node.textContent ?? '').includes('同事 C')), byClass('lc-peerName').map((n) => n.textContent).join('|'))
+check('发现页显示本机网段快捷键', byClass('lanchat-btn').some((node) => (node.textContent ?? '').includes('192.168.1.0/24')))
+check('发现页列出发现的节点', byClass('lanchat-peerName').some((node) => (node.textContent ?? '').includes('同事 C')), byClass('lanchat-peerName').map((n) => n.textContent).join('|'))
 
 // ---- 扫描
-const scanBtn = byClass('lc-btn').find((node) => (node.textContent ?? '') === '扫描')
+const scanBtn = byClass('lanchat-btn').find((node) => (node.textContent ?? '') === '扫描')
 await act(async () => {
   scanBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
 })
 await flush()
 check('扫描请求已发出', backend.calls.some((row) => row.path === '/scan'))
-check('显示扫描进度', byClass('lc-progress').length === 1)
+check('显示扫描进度', byClass('lanchat-progress').length === 1)
 
 // ---- 添加发现的节点
 await flush(10)
-const addBtn = byClass('lc-btn').find((node) => (node.textContent ?? '') === '添加')
+const addBtn = byClass('lanchat-btn').find((node) => (node.textContent ?? '') === '添加')
 check('发现节点有「添加」按钮', addBtn !== undefined)
 if (addBtn !== undefined) {
   await act(async () => {
@@ -459,23 +459,23 @@ if (addBtn !== undefined) {
 }
 
 // ---- 新建群
-const plusBtn = [...container.querySelectorAll('.lc-iconBtn')].find((node) => (node.getAttribute('title') ?? '') === '新建群聊')
+const plusBtn = [...container.querySelectorAll('.lanchat-iconBtn')].find((node) => (node.getAttribute('title') ?? '') === '新建群聊')
 check('有新建群按钮', plusBtn !== undefined)
 await act(async () => {
   plusBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
 })
 await flush()
-check('弹出新建群对话框', container.querySelector('.lc-modal') !== null)
-check('对话框有群名输入', container.querySelector('#lc-gname') !== null)
+check('弹出新建群对话框', container.querySelector('.lanchat-modal') !== null)
+check('对话框有群名输入', container.querySelector('#lanchat-gname') !== null)
 
-const groupInput = container.querySelector('#lc-gname')
+const groupInput = container.querySelector('#lanchat-gname')
 await act(async () => {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
   setter.call(groupInput, '新的群')
   groupInput.dispatchEvent(new window.Event('input', { bubbles: true }))
 })
 await flush()
-const createBtn = [...container.querySelectorAll('.lc-modalFoot .lc-btn')].find((node) => (node.textContent ?? '') === '创建')
+const createBtn = [...container.querySelectorAll('.lanchat-modalFoot .lanchat-btn')].find((node) => (node.textContent ?? '') === '创建')
 check('创建按钮存在', createBtn !== undefined)
 await act(async () => {
   createBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
@@ -484,24 +484,24 @@ await flush()
 check('建群请求已发出', backend.calls.some((row) => row.path === '/groups/create' && String(row.body).includes('新的群')))
 
 // ---- 设置
-const settingsBtn = [...container.querySelectorAll('.lc-iconBtn')].find((node) => (node.getAttribute('title') ?? '') === '设置')
+const settingsBtn = [...container.querySelectorAll('.lanchat-iconBtn')].find((node) => (node.getAttribute('title') ?? '') === '设置')
 check('有设置按钮', settingsBtn !== undefined)
 await act(async () => {
   settingsBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
 })
 await flush()
-check('设置对话框打开', container.querySelector('#lc-nick') !== null)
+check('设置对话框打开', container.querySelector('#lanchat-nick') !== null)
 check('设置里显示自己的 ID', text().includes('lc-self'))
 check('设置里显示本机地址', text().includes('192.168.1.5'))
 
-const nickInput = container.querySelector('#lc-nick')
+const nickInput = container.querySelector('#lanchat-nick')
 await act(async () => {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
   setter.call(nickInput, '新昵称')
   nickInput.dispatchEvent(new window.Event('input', { bubbles: true }))
 })
 await flush()
-const saveBtn = [...container.querySelectorAll('.lc-modalFoot .lc-btn')].find((node) => (node.textContent ?? '') === '保存')
+const saveBtn = [...container.querySelectorAll('.lanchat-modalFoot .lanchat-btn')].find((node) => (node.textContent ?? '') === '保存')
 await act(async () => {
   saveBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
 })
@@ -509,29 +509,29 @@ await flush()
 check('保存设置请求已发出', backend.calls.some((row) => row.path === '/settings' && String(row.body).includes('新昵称')))
 
 // ---- 回到单聊（建群后主面板已切到新群）
-const chatsTab = byClass('lc-tab').find((node) => (node.textContent ?? '').includes('会话'))
+const chatsTab = byClass('lanchat-tab').find((node) => (node.textContent ?? '').includes('会话'))
 await act(async () => {
   chatsTab.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
 })
 await flush()
-const dmRow2 = byClass('lc-row').find((node) => (node.textContent ?? '').includes('同事 B'))
+const dmRow2 = byClass('lanchat-row').find((node) => (node.textContent ?? '').includes('同事 B'))
 check('会话页签回到单聊', dmRow2 !== undefined)
 await act(async () => {
   dmRow2.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
 })
 await flush()
-check('切回单聊后消息可见', byClass('lc-bubbleMsg').length >= 2, `${byClass('lc-bubbleMsg').length}`)
+check('切回单聊后消息可见', byClass('lanchat-bubbleMsg').length >= 2, `${byClass('lanchat-bubbleMsg').length}`)
 
 // ---- SSE 实时消息
 check('建立了 EventSource', eventSources.length >= 1, `${eventSources.length}`)
 const source0 = eventSources[0]
-const before = byClass('lc-bubbleMsg').length
+const before = byClass('lanchat-bubbleMsg').length
 await act(async () => {
   source0.emit('message', { id: 'sse-1', convId: backend.dmConv, from: 'lc-b', fromName: '同事 B', kind: 'text', text: '实时推送来的', ts: Date.now(), self: false })
 })
 await flush()
-check('SSE 消息追加到线程', byClass('lc-bubbleMsg').length === before + 1, `${before} → ${byClass('lc-bubbleMsg').length}`)
-check('SSE 消息内容正确', byClass('lc-bubbleMsg').some((node) => (node.textContent ?? '') === '实时推送来的'))
+check('SSE 消息追加到线程', byClass('lanchat-bubbleMsg').length === before + 1, `${before} → ${byClass('lanchat-bubbleMsg').length}`)
+check('SSE 消息内容正确', byClass('lanchat-bubbleMsg').some((node) => (node.textContent ?? '') === '实时推送来的'))
 
 // ---- 文件消息渲染
 await act(async () => {
@@ -548,9 +548,9 @@ await act(async () => {
   })
 })
 await flush()
-check('文件消息渲染成卡片', byClass('lc-fileCard').length === 1)
+check('文件消息渲染成卡片', byClass('lanchat-fileCard').length === 1)
 check('文件卡片显示大小', text().includes('20.0 KB'))
-check('文件卡片链接到下载路由', byClass('lc-fileCard')[0]?.getAttribute('href')?.includes('/lan-chat/file?id=f-9'), byClass('lc-fileCard')[0]?.getAttribute('href'))
+check('文件卡片链接到下载路由', byClass('lanchat-fileCard')[0]?.getAttribute('href')?.includes('/lan-chat/file?id=f-9'), byClass('lanchat-fileCard')[0]?.getAttribute('href'))
 
 // ---- 清理
 await act(async () => {
