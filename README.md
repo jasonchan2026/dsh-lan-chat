@@ -94,8 +94,6 @@ dsh plugin --profile desktop add link:$PWD
 
 ## 配置
 
-## 配置
-
 插件在 `cordis.patch.yml` 里支持三个可选参数：
 
 ```yaml
