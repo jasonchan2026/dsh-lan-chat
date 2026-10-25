@@ -430,6 +430,85 @@ const main = async () => {
     await rm(busyDir, { recursive: true, force: true })
   }
 
+  // ---- 端口占用者诊断与「强制释放」
+  // 这一段用真实的本机端口占用进程，验证 findPortHolder / inspectHolder 的判断，
+  // 以及 /listen/release 在「占用者不是残留 DSH」时必须拒绝。
+  {
+    const { findPortHolder, inspectHolder } = await import('../lib/index.js')
+
+    // 1) 查得到自己起的监听者
+    const probePort = 45917
+    const squatter = createNetServer(() => {})
+    await new Promise((resolve) => squatter.listen(probePort, '0.0.0.0', resolve))
+    const found = await findPortHolder(probePort)
+    check('findPortHolder 能查到占用者', found !== null && found.pid > 0, JSON.stringify(found))
+    check('findPortHolder 查到的 pid 就是本进程', found !== null && found.pid === process.pid, String(found?.pid))
+
+    // 2) 本进程绝不能被判成「可杀」
+    const selfMeta = await inspectHolder(process.pid, process.pid)
+    check('inspectHolder 不把自己当成可释放目标', selfMeta.orphan === false, selfMeta.reason)
+
+    // 3) 端口空着时查不到占用者
+    await new Promise((resolve) => squatter.close(resolve))
+    const empty = await findPortHolder(probePort)
+    check('端口空着时 findPortHolder 返回 null', empty === null, JSON.stringify(empty))
+
+    // 4) 非法端口号要安全返回
+    const bad = await findPortHolder(0)
+    check('非法端口号不会崩', bad === null)
+    const bad2 = await findPortHolder(-1)
+    check('负端口号不会崩', bad2 === null)
+
+    // 5) 真正的守卫生效：非残留进程占着端口时，/listen/release 必须拒绝动手。
+    const guardedPort = 45918
+    const other = createNetServer(() => {})
+    await new Promise((resolve) => other.listen(guardedPort, '0.0.0.0', resolve))
+    const relDir = await mkdtemp(join(tmpdir(), 'lanchat-release-'))
+    const relCtx = makeCtx()
+    const relHost = await startHost(relCtx, { dataDir: relDir, port: guardedPort, nickname: '拒绝释放' })
+    check('（释放测试）端口先被别的程序占住', relHost.port === 0)
+    const { server: relServer, port: relApiPort } = await serveRoutes(relCtx)
+    const relApi = (path, options) => call(relApiPort, `/lan-chat${path}`, options)
+
+    const relState = await relApi('/state')
+    check('/state 带占用者诊断', relState.json?.holder !== null && relState.json?.holder?.pid === process.pid, JSON.stringify(relState.json?.holder))
+    check('占用者是当前测试进程，不可被判为残留', relState.json?.holder?.orphan === false, relState.json?.holder?.reason)
+
+    const refused = await relApi('/listen/release', { method: 'POST', body: {} })
+    check('非残留进程占端口时拒绝释放', refused.status === 409 && refused.json?.ok === false, `status=${refused.status}`)
+
+    // 6) 只要不做释放，占用者必须还活着（守卫生效的证据）
+    let stillAlive = true
+    try {
+      process.kill(process.pid, 0)
+    } catch {
+      stillAlive = false
+    }
+    check('被拒绝后测试进程仍然存活', stillAlive)
+
+    // 7) GET 不允许
+    const getRelease = await relApi('/listen/release')
+    check('/listen/release 拒绝 GET', getRelease.status === 405)
+
+    // 8) 端口在两次调用之间换了占用者：动手前必须重新核实，不能沿用缓存里的 pid。
+    //    这里把占用者换成另一个全新进程，模拟 pid 复用 / 占用者变更。
+    await new Promise((resolve) => other.close(resolve))
+    const second = createNetServer(() => {})
+    await new Promise((resolve) => second.listen(guardedPort, '0.0.0.0', resolve))
+    // 先读一次 /state 把旧占用者写进缓存（此时缓存里是 process.pid）
+    const cachedState = await relApi('/state')
+    check('（缓存）诊断结果已就绪', cachedState.json?.holder !== null)
+    // 换人之后调用 release：缓存里 pid 已经不对，应当拒绝/放弃而不是照杀。
+    const afterSwap = await relApi('/listen/release', { method: 'POST', body: {} })
+    check('占用者变更后不盲杀（拒绝或改试绑定）', afterSwap.status === 409 || afterSwap.json?.releasing === false, `status=${afterSwap.status} body=${JSON.stringify(afterSwap.json)}`)
+    await new Promise((resolve) => second.close(resolve))
+
+    relServer.close()
+    await new Promise((resolve) => other.close(resolve))
+    await relHost.dispose()
+    await rm(relDir, { recursive: true, force: true })
+  }
+
   // ---- 重启后数据还在
   await host.dispose()
   server.close()

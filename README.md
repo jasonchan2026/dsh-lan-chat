@@ -214,8 +214,17 @@ $DSH_HOME/plugin-data/dsh-lan-chat/
 
 **端口被占用**
 
-改 `cordis.patch.yml` 里的 `port`，或者关掉占用该端口的程序。
-插件启动失败时界面顶部会显示红色提示，不影响其他功能。
+插件启动失败时界面顶部会显示红色提示，不影响其他功能。提示里会直接写出
+**占用者的 PID 和已运行时长**：
+
+- 如果占用者是**上一次 DSH 退出后残留的宿主进程**（父进程已被 launchd 收养），
+  界面会出现「强制释放」按钮，点一下就会结束它并重新监听，不用重启 DSH。
+  宿主只对确认过身份的残留进程动手，判据是「命令行是 DSH 宿主 + 父进程为 1 +
+  不是当前进程或其祖先」，三条缺一不可。
+- 如果是别的程序占着，按钮不会出现（强行杀别人的进程不安全），
+  改 `cordis.patch.yml` 里的 `port`，或者关掉那个程序。
+
+`/listen/retry` 只重试绑定、从不杀进程；`/listen/release` 才会结束残留宿主。
 
 **消息发不出去**
 
@@ -234,14 +243,14 @@ $DSH_HOME/plugin-data/dsh-lan-chat/
 
 ```bash
 node scripts/selftest.mjs    # 协议层：WS 帧、文件、群、扫描、鉴权、昵称同步、持久化（34 项）
-node scripts/hosttest.mjs    # 宿主路由：全部 /lan-chat/* 接口 + 桌面端来源校验 + 端口重试 + 删群（97 项）
+node scripts/hosttest.mjs    # 宿主路由：全部 /lan-chat/* 接口 + 桌面端来源校验 + 端口重试与强制释放 + 删群（111 项）
 node scripts/clienttest.mjs  # 界面：真 React + jsdom 挂载并驱动交互（67 项）
 node scripts/e2etest.mjs     # 两台机器互联：发现→添加→单聊→群聊→文件→解散群（40 项）
 node scripts/sectest.mjs     # 安全回归：22 个渗透测试发现逐条验证 + 解散群越权（52 项）
 node scripts/themetest.mjs   # 主题配色：DSH token 存在性 + 明暗两套 WCAG 对比度（65 项）
 ```
 
-合计 **288 项**（不含需要额外开发依赖的 `clienttest.mjs`）。
+合计 **302 项**（不含需要额外开发依赖的 `clienttest.mjs`）。
 
 `themetest.mjs` 是补上「深色主题下配色失效」这个缺陷后加的。它做两件事：
 把插件引用的每个 `--dsw-alias-*` 变量拿去和 DSH 主题比对，名字写错立刻失败
@@ -276,10 +285,12 @@ pnpm add -D react react-dom jsdom
 
 **浏览器层（`/lan-chat/*`，走 DSH web）**
 
-- 全部 21 条路由都过同源检查：Host 必须是回环地址，`Sec-Fetch-Site` 必须是
+- 全部 22 条路由都过同源检查：Host 必须是回环地址，`Sec-Fetch-Site` 必须是
   `same-origin`/`none`/空，带 Origin 时必须与 Host 一致
 - 写操作（POST/PUT/DELETE）**必须带 Origin**，堵掉无 Origin 的表单型 CSRF
 - `/state` 和 `/settings` 不再回显明文访问码，只给 `hasAccessCode: true/false`
+- `/listen/release` 会结束进程，因此只对通过三条判据（DSH 宿主命令行、父进程为 1、
+  非当前进程/祖先）的**残留宿主**生效；其余情况返回 409 拒绝，绝不误杀别的程序
 
 **访问码**
 

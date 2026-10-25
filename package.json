@@ -1,6 +1,6 @@
 {
   "name": "dsh-lan-chat",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "description": "局域网聊天助手 — 隔离内网即时通讯：单聊 / 群聊 / 文件传输 / 网段扫描加好友",
   "type": "module",
   "main": "lib/index.js",
