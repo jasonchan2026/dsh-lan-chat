@@ -37,7 +37,7 @@
 在 DSH Desktop 的插件市场里搜索 `dsh-lan-chat`，或者直接用命令：
 
 ```bash
-dsh plugin --profile desktop add github:<你的用户名>/dsh-lan-chat
+dsh plugin --profile desktop add github:jasonchan2026/dsh-lan-chat
 ```
 
 装完重启 DSH Desktop，左侧就会出现「局域网聊天助手」。
