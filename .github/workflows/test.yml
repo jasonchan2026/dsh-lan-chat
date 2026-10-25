@@ -1,0 +1,43 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # 插件本体零运行时依赖，这三套测试不需要安装任何东西
+      - name: 语法检查
+        run: |
+          for f in lib/*.js; do node --check "$f"; done
+
+      - name: 协议层自测
+        run: node scripts/selftest.mjs
+
+      - name: 宿主路由自测
+        run: node scripts/hosttest.mjs
+
+      - name: 两台机器端到端
+        run: node scripts/e2etest.mjs
+
+      # 界面测试要 React + jsdom，只有这一步装开发依赖
+      - name: 安装界面测试依赖
+        run: npm install --no-save react react-dom jsdom
+
+      - name: 界面自测
+        run: node scripts/clienttest.mjs

@@ -1,0 +1,10 @@
+# dsh-lan-chat 组合包补丁：把「局域网聊天助手」插件插入 Loader 树。
+# 客户端半侧由 dsh-client-modules 扫描 dsh.client 声明后经 /plugins 提供。
+#
+# 可选的 entry config（写在本行的 config: 下）：
+#   port      局域网监听端口，默认 45871
+#   nickname  本机昵称，默认 <主机名>
+#   dataDir   数据目录，默认 $DSH_HOME/plugin-data/dsh-lan-chat
+- insert:
+    - id: lan-chat
+      name: dsh-lan-chat
