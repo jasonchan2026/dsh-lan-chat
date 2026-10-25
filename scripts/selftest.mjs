@@ -6,7 +6,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Store, dmConvId, groupConvId } from '../lib/store.js'
-import { LanNode, probeHost, localSubnets, expandCidr, localAddresses } from '../lib/node.js'
+import { LanNode, probeHost, localSubnets, expandCidr, localAddresses, postJson, API_PREFIX } from '../lib/node.js'
 
 const results = []
 function check(name, condition, detail) {
@@ -19,9 +19,22 @@ async function makeNode(port, nickname) {
   const store = new Store({ dir })
   await store.init()
   store.settings.nickname = nickname
-  const node = new LanNode({ store, port })
+  // 两个节点都在本机，扫描/投递都走 127.0.0.1；真实部署不开这个开关。
+  const node = new LanNode({ store, port, allowLoopback: true })
   const actual = await node.start()
   return { dir, store, node, port: actual }
+}
+
+/** 用 authKey 走一次 /hello，拿到对端签发的 token。 */
+async function handshake(self, peerPort) {
+  const hello = await postJson(`http://127.0.0.1:${peerPort}${API_PREFIX}/hello`, {
+    peerId: self.store.peerId,
+    nickname: self.store.settings.nickname,
+    port: self.port,
+    authKey: self.node.authKey,
+  })
+  if (hello?.ok !== true || typeof hello.token !== 'string') throw new Error(`handshake failed: ${hello?.error}`)
+  return hello.token
 }
 
 const main = async () => {
@@ -57,7 +70,7 @@ const main = async () => {
   const received = new Promise((resolve) => {
     b.node.once('message', resolve)
   })
-  const { postJson, API_PREFIX } = await import('../lib/node.js')
+  const tokenForB = await handshake(a, b.port)
   const sent = await postJson(`http://127.0.0.1:${b.port}${API_PREFIX}/send`, {
     message: {
       id: 'm-test-1',
@@ -68,7 +81,7 @@ const main = async () => {
       text,
       ts: Date.now(),
     },
-  })
+  }, 8000, tokenForB)
   check('消息投递返回 ok', sent?.ok === true)
   const got = await Promise.race([received, new Promise((resolve) => setTimeout(() => resolve(null), 3000))])
   check('节点B 收到消息事件', got?.text === text, got?.text)
@@ -78,13 +91,18 @@ const main = async () => {
   // ---- 4. 幂等：同 id 重发不重复
   await postJson(`http://127.0.0.1:${b.port}${API_PREFIX}/send`, {
     message: { id: 'm-test-1', convId: dmId, from: a.store.peerId, kind: 'text', text, ts: Date.now() },
-  })
+  }, 8000, tokenForB)
   const after = await b.store.listMessages(dmId)
   check('重复 id 不产生重复消息', after.length === 1, `count=${after.length}`)
 
   // ---- 5. WebSocket 实时推送
   const { connectWebSocket } = await import('../lib/ws.js')
-  const socket = await connectWebSocket({ host: '127.0.0.1', port: b.port, path: `${API_PREFIX}/ws?peerId=${a.store.peerId}&nickname=${encodeURIComponent('节点A')}` })
+  const socket = await connectWebSocket({
+    host: '127.0.0.1',
+    port: b.port,
+    path: `${API_PREFIX}/ws?peerId=${a.store.peerId}&nickname=${encodeURIComponent('节点A')}`,
+    headers: { authorization: `Bearer ${tokenForB}` },
+  })
   check('WebSocket 握手成功', socket.closed === false)
 
   /** 收下一帧 JSON（带超时）。 */
@@ -109,13 +127,17 @@ const main = async () => {
   const ready = await nextFrame()
   check('WS 收到 ready 帧', ready?.type === 'ready' && ready.peerId === b.store.peerId, ready?.type)
 
-  const pending = nextFrame()
+  const localEvent = new Promise((resolve) => b.node.once('message', resolve))
+  const echo = nextFrame(1200)
   socket.sendJson({
     type: 'message',
     message: { id: 'm-test-2', convId: dmId, from: a.store.peerId, fromName: '节点A', kind: 'text', text: '走 WS 的消息', ts: Date.now() },
   })
-  const wsMessage = await pending
-  check('WS 收到自己发的消息回显', wsMessage?.type === 'message' && wsMessage.message?.text === '走 WS 的消息', wsMessage?.type)
+  // 关键回归点：消息不再广播给所有连接，发送方不会收到自己的回显。
+  const echoed = await echo
+  check('消息不再广播回发送方', echoed === null, echoed?.type)
+  const localGot = await Promise.race([localEvent, new Promise((resolve) => setTimeout(() => resolve(null), 3000))])
+  check('对端本地收到消息事件', localGot?.text === '走 WS 的消息', localGot?.text)
   const bAfterWs = await b.store.listMessages(dmId)
   check('WS 消息已落盘', bAfterWs.some((row) => row.text === '走 WS 的消息'), `count=${bAfterWs.length}`)
   check('节点B 认为 A 在线', b.node.sockets.has(a.store.peerId))
@@ -128,13 +150,13 @@ const main = async () => {
 
   // 大帧（>125 字节，走 16 位长度分支）与 >64KiB 的帧
   const longText = '长'.repeat(4000)
-  const bigPromise = nextFrame(5000)
+  const bigEvent = new Promise((resolve) => b.node.once('message', resolve))
   socket.sendJson({
     type: 'message',
     message: { id: 'm-test-3', convId: dmId, from: a.store.peerId, fromName: '节点A', kind: 'text', text: longText, ts: Date.now() + 1 },
   })
-  const bigEcho = await bigPromise
-  check('超过 64KiB 的帧能正确收发', bigEcho?.message?.text?.length === longText.length, `${bigEcho?.message?.text?.length} 字符`)
+  const bigGot = await Promise.race([bigEvent, new Promise((resolve) => setTimeout(() => resolve(null), 5000))])
+  check('超过 64KiB 的帧能正确收发', bigGot?.text?.length === longText.length, `${bigGot?.text?.length} 字符`)
 
   // ---- 6. 文件传输
   const fileBody = Buffer.from(`离线文件内容 ${Date.now()}\n`.repeat(20), 'utf8')
@@ -143,7 +165,7 @@ const main = async () => {
     const req = (globalThis.__http ??= undefined)
     import('node:http').then(({ request }) => {
       const r = request(
-        { host: '127.0.0.1', port: b.port, path: `${API_PREFIX}/upload?${uploadQuery}`, method: 'POST', headers: { 'content-type': 'application/octet-stream', 'content-length': fileBody.length } },
+        { host: '127.0.0.1', port: b.port, path: `${API_PREFIX}/upload?${uploadQuery}`, method: 'POST', headers: { 'content-type': 'application/octet-stream', 'content-length': fileBody.length, authorization: `Bearer ${tokenForB}` } },
         (response) => {
           const chunks = []
           response.on('data', (chunk) => chunks.push(chunk))
@@ -164,7 +186,7 @@ const main = async () => {
   check('上传后 sha256 已计算', typeof uploaded?.file?.sha256 === 'string' && uploaded.file.sha256.length === 64)
   const downloaded = await new Promise((resolve) => {
     import('node:http').then(({ request }) => {
-      const r = request({ host: '127.0.0.1', port: b.port, path: `${API_PREFIX}/file/f-test-1`, method: 'GET' }, (response) => {
+      const r = request({ host: '127.0.0.1', port: b.port, path: `${API_PREFIX}/file/f-test-1`, method: 'GET', headers: { authorization: `Bearer ${tokenForB}` } }, (response) => {
         const chunks = []
         response.on('data', (chunk) => chunks.push(chunk))
         response.on('end', () => resolve(Buffer.concat(chunks)))
@@ -178,7 +200,8 @@ const main = async () => {
   // ---- 7. 群
   const group = b.store.createGroup({ name: '测试群', members: [b.store.peerId, a.store.peerId], createdBy: b.store.peerId })
   const groupConv = groupConvId(group.id)
-  const groupSync = await postJson(`http://127.0.0.1:${a.port}${API_PREFIX}/group`, { group })
+  const tokenForA = await handshake(b, a.port)
+  const groupSync = await postJson(`http://127.0.0.1:${a.port}${API_PREFIX}/group`, { group }, 8000, tokenForA)
   check('群资料同步成功', groupSync?.ok === true)
   check('节点A 有了这个群', a.store.myGroups().some((row) => row.id === group.id))
   await b.store.appendMessage({ id: 'm-g1', convId: groupConv, from: b.store.peerId, fromName: '节点B', kind: 'text', text: '群里说话', ts: Date.now() })
@@ -203,8 +226,29 @@ const main = async () => {
   b.store.settings.accessCode = 'secret-code'
   const denied = await postJson(`http://127.0.0.1:${b.port}${API_PREFIX}/hello`, { peerId: 'x', accessCode: 'wrong' })
   check('错误访问码被拒', denied?.ok === false, denied?.error)
-  const allowed = await postJson(`http://127.0.0.1:${b.port}${API_PREFIX}/hello`, { peerId: a.store.peerId, nickname: '节点A', port: a.port, accessCode: 'secret-code' })
-  check('正确访问码放行', allowed?.ok === true)
+  const allowed = await postJson(`http://127.0.0.1:${b.port}${API_PREFIX}/hello`, {
+    peerId: a.store.peerId,
+    nickname: '节点A',
+    port: a.port,
+    accessCode: 'secret-code',
+    authKey: a.node.authKey,
+  })
+  check('正确访问码放行', allowed?.ok === true, allowed?.error)
+  check('握手返回 token', typeof allowed?.token === 'string' && allowed.token.length > 10)
+  // 身份密钥不对：即使访问码正确也要拒绝（防顶替已有节点）。
+  const impostor = await postJson(`http://127.0.0.1:${b.port}${API_PREFIX}/hello`, {
+    peerId: a.store.peerId,
+    nickname: '假节点A',
+    port: a.port,
+    accessCode: 'secret-code',
+    authKey: 'not-the-real-key',
+  })
+  check('冒用 peerId 被拒（authKey 不匹配）', impostor?.ok === false, impostor?.error)
+  // 无 token 访问受保护接口
+  const noToken = await postJson(`http://127.0.0.1:${b.port}${API_PREFIX}/send`, {
+    message: { id: 'm-x', convId: dmId, from: a.store.peerId, kind: 'text', text: 'no token' },
+  })
+  check('无 token 投递被拒（401）', noToken?.ok === false)
 
   // ---- 11. 持久化
   const beforeRestart = await b.store.listMessages(dmId)

@@ -12,3 +12,16 @@ yarn.lock
 # 系统垃圾
 .DS_Store
 Thumbs.db
+
+# 安全审计产物：一律不入库
+# PoC 脚本含真实 peerId、本机绝对路径、内网地址，本身就是可直接使用的攻击载荷；
+# 渗透测试报告同理（含完整复现步骤与未修复漏洞清单）。
+scripts/poc-*.mjs
+scripts/*-poc.mjs
+poc/
+pocs/
+audit/
+*.pcap
+*.pcapng
+docs/*渗透测试*
+docs/*-report.md

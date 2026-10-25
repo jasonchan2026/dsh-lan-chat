@@ -70,6 +70,10 @@ function call(port, path, { method = 'GET', body, headers = {} } = {}) {
         path,
         method,
         headers: {
+          // 模拟真实浏览器：同源 fetch 一定带 Origin 与 Sec-Fetch-Site。
+          // 测「缺 Origin」「跨站」时用 headers 覆盖掉这两项。
+          origin: `http://127.0.0.1:${port}`,
+          'sec-fetch-site': 'same-origin',
           ...(payload === null ? {} : { 'content-type': Buffer.isBuffer(body) ? 'application/octet-stream' : 'application/json', 'content-length': payload.length }),
           ...headers,
         },
@@ -97,7 +101,7 @@ const main = async () => {
   const { startHost } = await import('../lib/index.js')
   const ctx = makeCtx()
 
-  const host = await startHost(ctx, { dataDir: dir, port: 45911, nickname: '测试主机' })
+  const host = await startHost(ctx, { dataDir: dir, port: 45911, nickname: '测试主机', allowLoopback: true })
   check('startHost 返回句柄', host !== null && host.node !== undefined)
   check('局域网端口已监听', host.port === 45911, String(host.port))
   check('注册了全部路由', ctx.routes.size >= 20, `${ctx.routes.size} 条`)
@@ -118,7 +122,36 @@ const main = async () => {
   const sameOrigin = await api('/settings', { method: 'POST', body: { nickname: '改过的名字' }, headers: { origin: `http://127.0.0.1:${port}` } })
   check('同源写设置通过', sameOrigin.json?.ok === true && sameOrigin.json.settings.nickname === '改过的名字', sameOrigin.json?.settings?.nickname)
   const setCode = await api('/settings', { method: 'POST', body: { accessCode: 'p@ss', autoDiscover: false } })
-  check('可设置访问码', setCode.json?.settings?.accessCode === 'p@ss')
+  check('可设置访问码（响应只回 hasAccessCode）', setCode.json?.settings?.hasAccessCode === true)
+  check('响应里不再回显明文访问码', setCode.json?.settings?.accessCode === undefined)
+  const stateAfterCode = await api('/state')
+  check('/state 不再泄露访问码', stateAfterCode.json?.settings?.accessCode === undefined && stateAfterCode.json?.settings?.hasAccessCode === true)
+
+  // ---- F-09：写操作缺 Origin 必须拒绝（表单型 CSRF 不带 Origin）
+  const noOrigin = await api('/settings', { method: 'POST', body: { nickname: 'csrf' }, headers: { origin: '', 'sec-fetch-site': '' } })
+  check('F-09 写操作缺 Origin 被拒（403）', noOrigin.status === 403, String(noOrigin.status))
+  const noOriginGet = await api('/state', { headers: { origin: '', 'sec-fetch-site': '' } })
+  check('F-09 读操作缺 Origin 仍放行（EventSource/导航）', noOriginGet.status === 200, String(noOriginGet.status))
+
+  // ---- F-10：DNS rebinding —— Host 不是回环就拒绝
+  const rebind = await api('/state', { headers: { host: 'evil.example.com' } })
+  check('F-10 非回环 Host 被拒（403）', rebind.status === 403, String(rebind.status))
+  const rebindWrite = await api('/settings', { method: 'POST', body: { nickname: 'x' }, headers: { host: 'evil.example.com', origin: 'http://evil.example.com' } })
+  check('F-10 非回环 Host 写操作被拒（403）', rebindWrite.status === 403, String(rebindWrite.status))
+
+  // ---- F-08：每个路由都要过同源检查（不是只有部分）
+  // 只列注册过的精确路由（/file 是前缀路由，不走 route()）。
+  const routePaths = ['/state', '/settings', '/contacts', '/conversations', '/groups', '/messages', '/discover', '/diag', '/events', '/probe', '/scan', '/read']
+  let guarded = 0
+  for (const path of routePaths) {
+    const res = await api(path, { headers: { host: 'evil.example.com' } })
+    if (res.status === 403) guarded += 1
+  }
+  check('F-08 全部路由都过同源检查', guarded === routePaths.length, `${guarded}/${routePaths.length}`)
+
+  // ---- F-12：SSE 需要同源
+  const sseBad = await api('/events', { headers: { host: 'evil.example.com' } })
+  check('F-12 SSE 非回环 Host 被拒（403）', sseBad.status === 403, String(sseBad.status))
   await api('/settings', { method: 'POST', body: { accessCode: '', autoDiscover: true } })
 
   // ---- 联系人
@@ -205,7 +238,9 @@ const main = async () => {
 
   // ---- 诊断
   const diag = await api('/diag')
-  check('/diag 返回数据目录', typeof diag.json?.dataDir === 'string' && diag.json.dataDir === dir, diag.json?.dataDir)
+  // 绝对路径属于内部信息，不再回传，只回目录名。
+  check('/diag 不回传绝对路径', diag.json?.dataDir === undefined)
+  check('/diag 返回目录名', typeof diag.json?.dataDirName === 'string' && dir.endsWith(diag.json.dataDirName), diag.json?.dataDirName)
   check('/diag 显示监听端口', diag.json?.port === host.port)
 
   // ---- SSE

@@ -55,7 +55,7 @@ function serve(ctx) {
   })
 }
 
-function call(port, path, { method = "GET", body } = {}) {
+function call(port, path, { method = "GET", body, headers = {} } = {}) {
   return new Promise((resolve) => {
     const payload = body === undefined ? null : Buffer.isBuffer(body) ? body : Buffer.from(JSON.stringify(body), 'utf8')
     const req = request(
@@ -64,7 +64,13 @@ function call(port, path, { method = "GET", body } = {}) {
         port,
         path,
         method,
-        headers: payload === null ? {} : { 'content-type': Buffer.isBuffer(body) ? 'application/octet-stream' : 'application/json', 'content-length': payload.length },
+        headers: {
+          // 模拟真实浏览器：同源 fetch 一定带 Origin 与 Sec-Fetch-Site。
+          origin: `http://127.0.0.1:${port}`,
+          "sec-fetch-site": "same-origin",
+          ...(payload === null ? {} : { "content-type": Buffer.isBuffer(body) ? "application/octet-stream" : "application/json", "content-length": payload.length }),
+          ...headers,
+        },
       },
       (res) => {
         const chunks = []
@@ -124,8 +130,10 @@ const main = async () => {
   // 两个节点用相邻端口（发现用 port+1），端口对动态挑，避免和本机在跑的实例撞车
   const nodePortA = await pickPortPair()
   const nodePortB = nodePortA + 1
-  const hostA = await startHost(ctxA, { dataDir: dirA, port: nodePortA, nickname: '机器甲' })
-  const hostB = await startHost(ctxB, { dataDir: dirB, port: nodePortB, nickname: '机器乙' })
+  // allowLoopback：两个节点都在本机，必须允许往 127.0.0.1 投递。
+  // 真实部署不会开这个开关，回环地址默认被 SSRF 防护挡掉。
+  const hostA = await startHost(ctxA, { dataDir: dirA, port: nodePortA, nickname: '机器甲', allowLoopback: true })
+  const hostB = await startHost(ctxB, { dataDir: dirB, port: nodePortB, nickname: '机器乙', allowLoopback: true })
 
   check('两台机器都启动', hostA.port === nodePortA && hostB.port === nodePortB, `${hostA.port} / ${hostB.port}`)
 
@@ -258,8 +266,15 @@ const main = async () => {
   const { postJson } = await import('../lib/node.js')
   const wrongHello = await postJson(`http://127.0.0.1:${nodePortB}/lan-chat/v1/hello`, { peerId: 'lc-x', accessCode: 'bad' })
   check('错误访问码握手被拒', wrongHello?.ok === false, wrongHello?.error)
-  const rightHello = await postJson(`http://127.0.0.1:${nodePortB}/lan-chat/v1/hello`, { peerId: hostA.store.peerId, nickname: '机器甲', port: nodePortA, accessCode: 'team-2026' })
-  check('正确访问码握手通过', rightHello?.ok === true)
+  const rightHello = await postJson(`http://127.0.0.1:${nodePortB}/lan-chat/v1/hello`, {
+    peerId: hostA.store.peerId,
+    nickname: '机器甲',
+    port: nodePortA,
+    accessCode: 'team-2026',
+    authKey: hostA.node.authKey,
+  })
+  check('正确访问码握手通过', rightHello?.ok === true, rightHello?.error)
+  check('握手拿到 token', typeof rightHello?.token === 'string' && rightHello.token.length > 10)
 
   // ---- 9. 离线行为
   await apiB('/contacts/remove', { method: 'POST', body: { peerId: hostA.store.peerId } })

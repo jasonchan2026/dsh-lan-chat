@@ -213,13 +213,14 @@ $DSH_HOME/plugin-data/dsh-lan-chat/
 
 ## 自测
 
-四套离线测试，不需要网络，也不需要 DSH 在跑：
+五套离线测试，不需要网络，也不需要 DSH 在跑：
 
 ```bash
-node scripts/selftest.mjs    # 协议层：WS 帧、文件、群、扫描、鉴权、持久化（28 项）
-node scripts/hosttest.mjs    # 宿主路由：全部 /lan-chat/* 接口（47 项）
+node scripts/selftest.mjs    # 协议层：WS 帧、文件、群、扫描、鉴权、持久化（32 项）
+node scripts/hosttest.mjs    # 宿主路由：全部 /lan-chat/* 接口（50 项）
 node scripts/clienttest.mjs  # 界面：真 React + jsdom 挂载并驱动交互（67 项）
-node scripts/e2etest.mjs     # 两台机器互联：发现→添加→单聊→群聊→文件（34 项）
+node scripts/e2etest.mjs     # 两台机器互联：发现→添加→单聊→群聊→文件（35 项）
+node scripts/sectest.mjs     # 安全回归：22 个渗透测试发现逐条验证（40 项）
 ```
 
 `clienttest.mjs` 需要开发依赖 react / react-dom / jsdom（不进插件包）：
@@ -232,10 +233,40 @@ pnpm add -D react react-dom jsdom
 
 ## 安全说明
 
-- 默认信任同一局域网内的所有节点（这是内网通讯工具的常见取舍）
-- 需要隔离时在「设置」里设访问码，未持码的节点无法投递消息
-- 浏览器侧接口有同源校验，拒绝跨站写入
+> 2026-10-25 做过一次完整渗透测试，以下描述是**修复后**的实际行为（报告见 `docs/`，不入库）。
+
+**网络层（局域网端口，默认 45871）**
+
+- 只有 `/lan-chat/v1/info` 和 `/hello` 匿名可读，其余 7 个接口（`/send` `/sync` `/group`
+  `/profile` `/upload` `/file` `/ws`）**全部要求 token**，否则 401
+- token 由 `/hello` 签发：`<随机串>.<HMAC-SHA256>`，有效期 24 小时，最多同时保留 512 个
+- 每个节点在 `identity.json` 里有一份 `secret` 作为身份密钥。首次握手时对端会记住它（TOFU），
+  之后同一个 peerId 必须拿同一把密钥，否则 403 —— 防止别人顶替已知节点
+- `/send` 会用 token 持有者的 peerId **覆盖** `from` 字段，不能伪造发送者
+- 消息**不再广播**给所有连接，只投递给会话参与者
+- 只向 RFC1918 私网地址发起连接；公网、`127.0.0.0/8`、`169.254.0.0/16`（云元数据服务）
+  一律拒绝，避免被当作 SSRF 跳板
+- 入站同理：来自公网或链路本地地址的请求直接 403，不进入任何处理逻辑
+- `/info` 不再返回主机名；`/diag` 只返回目录名，不回绝对路径
+
+**浏览器层（`/lan-chat/*`，走 DSH web）**
+
+- 全部 21 条路由都过同源检查：Host 必须是回环地址，`Sec-Fetch-Site` 必须是
+  `same-origin`/`none`/空，带 Origin 时必须与 Host 一致
+- 写操作（POST/PUT/DELETE）**必须带 Origin**，堵掉无 Origin 的表单型 CSRF
+- `/state` 和 `/settings` 不再回显明文访问码，只给 `hasAccessCode: true/false`
+
+**访问码**
+
+- 可选。设置后，对方必须在 `/hello` 里带上相同的码才能拿到 token
+- 访问码只是「入场券」，真正防越权的是 token；访问码本身不会被下发到前端
+
+**其它**
+
 - 不加密传输：局域网内可被同网段的人抓包。**不要用它传敏感凭据**
+- 默认监听 `0.0.0.0`（局域网内可用），但**入站会按来源地址过滤**：只有内网来源能访问。
+  若本机有公网地址，启动时会打 warn 日志；只想本机用可以设 `bind: 'local'`，只绑 `127.0.0.1`
+- 文件上传有配额（2 GiB）与 7 天回收，WebSocket 有单帧 8 MiB / 单连接 256 条 / 60 帧每秒上限
 
 ## 目录结构
 
@@ -255,6 +286,7 @@ dsh-lan-chat/
     ├── hosttest.mjs
     ├── clienttest.mjs
     ├── e2etest.mjs
+    ├── sectest.mjs      安全回归（渗透测试用例转成的可提交测试）
     └── wire-profile.mjs
 ```
 

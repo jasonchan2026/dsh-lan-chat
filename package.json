@@ -53,5 +53,13 @@
     "url": "https://github.com/jasonchan2026/dsh-lan-chat/issues"
   },
   "homepage": "https://github.com/jasonchan2026/dsh-lan-chat#readme",
-  "author": "JasonChan"
+  "author": "JasonChan",
+  "scripts": {
+    "test": "node scripts/selftest.mjs && node scripts/hosttest.mjs && node scripts/e2etest.mjs && node scripts/sectest.mjs",
+    "test:selftest": "node scripts/selftest.mjs",
+    "test:host": "node scripts/hosttest.mjs",
+    "test:e2e": "node scripts/e2etest.mjs",
+    "test:sec": "node scripts/sectest.mjs",
+    "test:client": "node scripts/clienttest.mjs"
+  }
 }
